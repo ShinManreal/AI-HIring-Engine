@@ -264,6 +264,7 @@ async def proxy_streamlit_http(path: str, request: Request):
         "content-encoding",
         "transfer-encoding",
         "connection"
+        "content-length"
     }
 
     response_headers = {
