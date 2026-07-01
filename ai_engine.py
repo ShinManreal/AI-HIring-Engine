@@ -4,10 +4,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-AI_PROVIDER = os.getenv("AI_PROVIDER", "ollama").strip().lower()
+AI_PROVIDER = os.getenv("AI_PROVIDER", "openai").strip().lower()
 
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20250514")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
 
 
 SYSTEM_PROMPT = """
@@ -24,6 +25,63 @@ Recruiting standards:
 - Use resume, screening answers, client needs, and transcript evidence.
 - Surface risks early.
 - Make useful recruiting judgments.
+"""
+
+
+def generate_with_openai(prompt):
+    try:
+        from openai import OpenAI
+
+        api_key = os.getenv("OPENAI_API_KEY")
+
+        if not api_key:
+            return """
+OpenAI is selected, but OPENAI_API_KEY is missing.
+
+How to fix:
+Add this to your Render environment variables:
+
+AI_PROVIDER=openai
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_MODEL=gpt-5.5
+
+Then redeploy.
+"""
+
+        client = OpenAI(api_key=api_key)
+
+        response = client.responses.create(
+            model=OPENAI_MODEL,
+            instructions=SYSTEM_PROMPT,
+            input=prompt,
+            temperature=0.2,
+            max_output_tokens=4000
+        )
+
+        return response.output_text.strip()
+
+    except Exception as error:
+        return f"""
+OpenAI AI engine is not available right now.
+
+Selected provider:
+OpenAI
+
+Model:
+{OPENAI_MODEL}
+
+Reason:
+{str(error)}
+
+How to fix:
+1. Check that OPENAI_API_KEY is correct in Render environment variables.
+2. Check that openai is installed:
+   pip install openai
+3. Check that the model name is valid.
+4. Redeploy Render.
+
+Temporary result:
+The app did not crash, but OpenAI output could not be generated.
 """
 
 
@@ -87,13 +145,13 @@ def generate_with_claude(prompt):
 Claude is selected, but ANTHROPIC_API_KEY is missing.
 
 How to fix:
-Add this to your .env file:
+Add this to your environment variables:
 
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
 AI_PROVIDER=claude
 CLAUDE_MODEL=claude-sonnet-4-5-20250514
 
-Then restart Streamlit.
+Then restart or redeploy.
 """
 
         client = Anthropic(api_key=api_key)
@@ -133,11 +191,11 @@ Reason:
 {str(error)}
 
 How to fix:
-1. Check that ANTHROPIC_API_KEY is correct in .env.
+1. Check that ANTHROPIC_API_KEY is correct.
 2. Check that anthropic is installed:
    pip install anthropic
 3. Check that the model name is valid.
-4. Restart Streamlit.
+4. Restart or redeploy.
 
 Temporary result:
 The app did not crash, but Claude output could not be generated.
@@ -145,6 +203,9 @@ The app did not crash, but Claude output could not be generated.
 
 
 def generate_ai_response(prompt):
+    if AI_PROVIDER == "openai":
+        return generate_with_openai(prompt)
+
     if AI_PROVIDER == "claude":
         return generate_with_claude(prompt)
 
@@ -156,12 +217,10 @@ Invalid AI_PROVIDER value:
 
 {AI_PROVIDER}
 
-Use one of these in your .env:
+Use one of these:
 
+AI_PROVIDER=openai
 AI_PROVIDER=claude
-
-or
-
 AI_PROVIDER=ollama
 """
 
