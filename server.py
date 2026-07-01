@@ -1,9 +1,12 @@
 import os
 import subprocess
 import time
+import asyncio
+import httpx
+import websockets
 
-from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, Header, HTTPException, Request, WebSocket
+from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel
 
 from supabase_database import (
@@ -15,17 +18,15 @@ from supabase_database import (
 )
 
 
-# IMPORTANT:
-# Render start command expects this exact variable:
-# uvicorn server:app --host 0.0.0.0 --port $PORT
-
 app = FastAPI(
     title="REPP Hiring Engine Gateway",
     version="1.0.0"
 )
 
-
 STREAMLIT_INTERNAL_PORT = int(os.getenv("STREAMLIT_INTERNAL_PORT", "8501"))
+STREAMLIT_HOST = "127.0.0.1"
+STREAMLIT_BASE_URL = f"http://{STREAMLIT_HOST}:{STREAMLIT_INTERNAL_PORT}"
+
 API_KEY = os.getenv("REPP_API_KEY", "")
 
 streamlit_process = None
@@ -45,17 +46,18 @@ def start_streamlit():
         "--server.port",
         str(STREAMLIT_INTERNAL_PORT),
         "--server.address",
-        "127.0.0.1",
+        STREAMLIT_HOST,
         "--server.headless",
         "true",
         "--server.enableCORS",
         "false",
         "--server.enableXsrfProtection",
-        "false"
+        "false",
+        "--server.baseUrlPath",
+        "app"
     ]
 
     streamlit_process = subprocess.Popen(command)
-
     time.sleep(3)
 
 
@@ -151,7 +153,7 @@ class ClientSearchRequest(BaseModel):
 
 @app.get("/")
 def root():
-    return RedirectResponse(url="/app")
+    return RedirectResponse(url="/app/")
 
 
 @app.get("/health")
@@ -162,11 +164,6 @@ def health_check():
         "web_app": "/app",
         "api": "/api"
     }
-
-
-@app.get("/app")
-def web_app_redirect():
-    return RedirectResponse(url=f"http://localhost:{STREAMLIT_INTERNAL_PORT}")
 
 
 @app.get("/api/admin/counts")
@@ -240,3 +237,133 @@ def api_get_client(
         raise HTTPException(status_code=404, detail="Client not found.")
 
     return client_to_dict(client)
+
+
+@app.api_route(
+    "/app/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
+)
+async def proxy_streamlit_http(path: str, request: Request):
+    target_url = f"{STREAMLIT_BASE_URL}/app/{path}"
+
+    headers = dict(request.headers)
+    headers.pop("host", None)
+
+    body = await request.body()
+
+    async with httpx.AsyncClient(timeout=None, follow_redirects=False) as client:
+        response = await client.request(
+            method=request.method,
+            url=target_url,
+            headers=headers,
+            content=body,
+            params=request.query_params
+        )
+
+    excluded_headers = {
+        "content-encoding",
+        "transfer-encoding",
+        "connection"
+    }
+
+    response_headers = {
+        key: value
+        for key, value in response.headers.items()
+        if key.lower() not in excluded_headers
+    }
+
+    return Response(
+        content=response.content,
+        status_code=response.status_code,
+        headers=response_headers,
+        media_type=response.headers.get("content-type")
+    )
+
+
+@app.api_route(
+    "/app",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
+)
+async def proxy_streamlit_root(request: Request):
+    target_url = f"{STREAMLIT_BASE_URL}/app/"
+
+    headers = dict(request.headers)
+    headers.pop("host", None)
+
+    body = await request.body()
+
+    async with httpx.AsyncClient(timeout=None, follow_redirects=False) as client:
+        response = await client.request(
+            method=request.method,
+            url=target_url,
+            headers=headers,
+            content=body,
+            params=request.query_params
+        )
+
+    excluded_headers = {
+        "content-encoding",
+        "transfer-encoding",
+        "connection"
+    }
+
+    response_headers = {
+        key: value
+        for key, value in response.headers.items()
+        if key.lower() not in excluded_headers
+    }
+
+    return Response(
+        content=response.content,
+        status_code=response.status_code,
+        headers=response_headers,
+        media_type=response.headers.get("content-type")
+    )
+
+
+@app.websocket("/app/{path:path}")
+async def proxy_streamlit_websocket(websocket: WebSocket, path: str):
+    await websocket.accept()
+
+    query_string = websocket.scope.get("query_string", b"").decode("utf-8")
+
+    if query_string:
+        target_ws_url = f"ws://{STREAMLIT_HOST}:{STREAMLIT_INTERNAL_PORT}/app/{path}?{query_string}"
+    else:
+        target_ws_url = f"ws://{STREAMLIT_HOST}:{STREAMLIT_INTERNAL_PORT}/app/{path}"
+
+    try:
+        async with websockets.connect(target_ws_url) as target_ws:
+
+            async def client_to_streamlit():
+                try:
+                    while True:
+                        message = await websocket.receive()
+
+                        if "text" in message:
+                            await target_ws.send(message["text"])
+
+                        elif "bytes" in message:
+                            await target_ws.send(message["bytes"])
+
+                except Exception:
+                    pass
+
+            async def streamlit_to_client():
+                try:
+                    async for message in target_ws:
+                        if isinstance(message, bytes):
+                            await websocket.send_bytes(message)
+                        else:
+                            await websocket.send_text(message)
+
+                except Exception:
+                    pass
+
+            await asyncio.gather(
+                client_to_streamlit(),
+                streamlit_to_client()
+            )
+
+    except Exception:
+        await websocket.close()
