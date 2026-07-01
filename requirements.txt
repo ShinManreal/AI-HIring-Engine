@@ -5,3 +5,7 @@ supabase
 pypdf
 python-docx
 ollama
+geopy
+pillow
+pytesseract
+anthropic
