@@ -10,3 +10,8 @@ pillow
 pytesseract
 anthropic
 openai
+fastapi
+uvicorn
+pydantic
+httpx
+websockets
