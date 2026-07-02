@@ -1,340 +1,279 @@
-def client_formatter_prompt(raw_client_notes):
-    return f"""
-You are REPP Talent's client intake formatter.
+from repp_ai_instructions import (
+    GLOBAL_RECRUITING_GUARDRAILS,
+    PRE_SCREENER_INSTRUCTIONS,
+    INTERVIEW_SCRIPT_GENERATOR_INSTRUCTIONS,
+    INTERVIEW_EVALUATOR_INSTRUCTIONS,
+    INTERVIEW_SOP_DO_NOT_ASK,
+    DEFAULT_ONE_CALL_INTERVIEW_SCRIPT_TEMPLATE,
+)
 
-Your job is to take messy, fragmented, incomplete client notes and turn them into a clean structured client hiring profile.
 
-Core rules:
-- Do not invent facts.
-- Do not add client requirements that are not stated.
-- If something is missing, write "Not specified."
-- Keep the profile clean and easy for an AI hiring engine to use.
-- Preserve important client-specific requirements exactly when possible.
-- Make fragmented notes easier to understand, but do not change the meaning.
-- If the notes mention location, service area, pay, schedule, must-haves, or disqualifiers, place them in the correct section.
-- This formatted profile will be used later to screen candidates, generate interview scripts, and evaluate interviews.
+def candidate_to_text(candidate):
+    if not candidate:
+        return "No candidate information provided."
 
-RAW CLIENT NOTES:
-{raw_client_notes}
+    try:
+        return f"""
+Candidate ID:
+{candidate[0]}
 
-Return the formatted client profile in this exact structure:
+Candidate Name:
+{candidate[1] or "Not specified"}
+
+Location:
+{candidate[2] or "Not specified"}
+
+Applied Role:
+{candidate[3] or "Not specified"}
+
+Resume Text:
+{candidate[4] or "No resume text available."}
+
+Screening Answers:
+{candidate[5] or "No screening answers available."}
+
+Portfolio Links:
+{candidate[6] or "No portfolio links provided."}
+
+Created At:
+{candidate[7] or "Not specified"}
+
+Email:
+{candidate[8] or "Not specified"}
+
+Phone:
+{candidate[9] or "Not specified"}
+
+Candidate Status:
+{candidate[10] or "Not specified"}
+
+Mapped Client ID:
+{candidate[11] or "Not specified"}
+
+Mapped Client Name:
+{candidate[12] or "Not specified"}
+
+Mapped Client Distance / Need Match Score:
+{candidate[13] if len(candidate) > 13 else "Not specified"}
+"""
+    except Exception:
+        return str(candidate)
+
+
+def client_to_text(client):
+    if not client:
+        return "No client information provided."
+
+    try:
+        return f"""
+Client ID:
+{client[0]}
 
 Client Name:
-Location:
+{client[1] or "Not specified"}
+
 Role:
+{client[2] or "Not specified"}
+
+Location:
+{client[3] or "Not specified"}
+
+Client Needs:
+{client[4] or "No client needs provided."}
+
+Formatted Client Needs:
+{client[9] if len(client) > 9 and client[9] else "No formatted client needs provided."}
+"""
+    except Exception:
+        return str(client)
+
+
+def client_formatter_prompt(raw_client_notes):
+    return f"""
+{GLOBAL_RECRUITING_GUARDRAILS}
+
+You are REPP Talent's client-needs formatter.
+
+Your job:
+Turn messy client intake notes into a clean, structured recruiting brief that can be used for candidate screening, interview scripts, client matching, and interview evaluation.
+
+Rules:
+- Do not invent facts.
+- Preserve exact compensation details.
+- Preserve exact schedule, availability, hiring radius, service radius, and location requirements.
+- Preserve whether gear is provided.
+- Preserve employment type.
+- Preserve hard requirements and dealbreakers.
+- Preserve client wording when possible.
+- If a field is missing, write "Not specified."
+- Do not over-summarize.
+- Do not remove important details.
+
+Output format:
+
+Client Name:
+[Client/contact name]
+
+Contact Name:
+[Contact name]
+
+Company Name:
+[Company name]
+
+Email:
+[Email if available]
+
+Monday Doc:
+[Monday doc if available]
+
+Role Hiring:
+[Role]
+
+Ideal Location for Hire:
+[Location]
+
+Compensation Type:
+[Compensation type]
+
+Compensation Details:
+[Exact compensation details]
+
+Is Gear Provided by the Company:
+[Yes / No / Not specified]
+
 Employment Type:
-Pay:
-Schedule:
-Service Area:
-Role Summary:
-Must-Haves:
-Nice-to-Haves:
-Disqualifiers / Red Flags:
-Client Values:
-Interview Priorities:
-Evaluation Rules:
-Notes / Missing Information:
+[Employment type]
+
+Hours Per Week:
+[Hours]
+
+Specific Availability Requirements:
+[Availability]
+
+Essential Character Traits / Values:
+[Traits]
+
+Anything Else We Should Know:
+[Additional notes]
+
+Hiring Radius:
+[Hiring radius]
+
+Green or Experienced:
+[Green or experienced preference]
+
+Service Radius:
+[Service radius]
+
+Urgency:
+[Urgency]
+
+Hard Requirements:
+[List hard requirements only.]
+
+Preferences:
+[List preferences only.]
+
+Dealbreakers / Watchouts:
+[List confirmed dealbreakers or watchouts only.]
+
+Recruiting Summary:
+[Short practical summary for REPP recruiters.]
+
+Raw Client Notes:
+{raw_client_notes}
 """
 
 
 def screening_prompt(candidate, client):
+    candidate_text = candidate_to_text(candidate)
+    client_text = client_to_text(client)
+
     return f"""
-You are REPP Talent's AI Hiring Engine.
+{GLOBAL_RECRUITING_GUARDRAILS}
 
-Your job is to screen the candidate against the client needs.
+{PRE_SCREENER_INSTRUCTIONS}
 
-This is a pre-interview screening.
-Do not be overly positive.
-Do not summarize only.
-Identify fit, risks, disqualifiers, and interview priorities.
-Make a real recruiting recommendation.
+Candidate Information:
+{candidate_text}
 
-Use a 5-star rating system:
-5 stars = Excellent fit
-4 stars = Strong fit
-3 stars = Possible fit, needs clarification
-2 stars = Weak fit
-1 star = No-Go
+Mapped Client Information:
+{client_text}
 
-Client-specific requirements override general assumptions.
-
-CLIENT DETAILS:
-Client Name: {client[1]}
-Role: {client[2]}
-Location: {client[3]}
-Client Needs / Pay: {client[4]}
-Client Needs / Schedule: {client[5]}
-Client Needs / Must-Haves: {client[6]}
-Client Needs / Nice-to-Haves: {client[7]}
-Client Needs / Disqualifiers: {client[8]}
-Client Needs / Evaluation Rules: {client[9]}
-
-CANDIDATE DETAILS:
-Name: {candidate[1]}
-Location: {candidate[2]}
-Applied Role: {candidate[3]}
-
-Resume Text:
-{candidate[4]}
-
-Screening Answers:
-{candidate[5]}
-
-Portfolio Links:
-{candidate[6]}
-
-Evaluate the candidate strictly against the client needs.
-
-Return in this exact format:
-
-Star Rating:
-Decision:
-Client Fit Summary:
-Strengths:
-Risks:
-Possible Disqualifiers:
-Schedule Alignment:
-Location Alignment:
-Compensation Alignment:
-Role Alignment:
-Questions to Ask in Interview:
-Recommended Next Step:
+Important:
+- Evaluate this candidate independently.
+- Use the mapped client's actual needs as the standard.
+- Use the resume heavily.
+- Use screening answers heavily.
+- Actively check for competing business risk.
+- Actively check for Real Estate license conflict.
+- Do not invent concerns.
+- If the concern can reasonably be verified in an interview, prefer Proceed to Initial Interview and list it under Interview Focus Areas.
+- Do not overpraise.
+- Make a real recruiting decision.
 """
 
 
 def interview_script_prompt(candidate, client):
+    candidate_text = candidate_to_text(candidate)
+    client_text = client_to_text(client)
+
     return f"""
-You are REPP Talent's interviewer.
+{GLOBAL_RECRUITING_GUARDRAILS}
 
-Create a natural 10 to 15 minute first-call interview script for this candidate.
+{INTERVIEW_SOP_DO_NOT_ASK}
 
-Goals:
-- Validate fit
-- Test reliability
-- Check schedule alignment
-- Check compensation alignment
-- Surface risks early
-- Pressure-test what the client actually cares about
-- Clarify resume and screening gaps
+{INTERVIEW_SCRIPT_GENERATOR_INSTRUCTIONS}
 
-Do not:
-- Rank the candidate
-- Score the candidate
-- Label pass/fail
-- Expose internal reasoning
-- Mention database fields, source files, workbook tabs, or mapping steps
+Default Script Template:
+{DEFAULT_ONE_CALL_INTERVIEW_SCRIPT_TEMPLATE}
 
-Use a professional but conversational tone.
-The script should feel natural for a recruiter to read during a real call.
-Tailor the questions to the candidate and the client.
-Do not make it generic.
+Candidate Information:
+{candidate_text}
 
-CLIENT DETAILS:
-Client Name: {client[1]}
-Role: {client[2]}
-Location: {client[3]}
-Client Needs / Pay: {client[4]}
-Client Needs / Schedule: {client[5]}
-Client Needs / Must-Haves: {client[6]}
-Client Needs / Nice-to-Haves: {client[7]}
-Client Needs / Disqualifiers: {client[8]}
-Client Needs / Evaluation Rules: {client[9]}
+Mapped Client Information:
+{client_text}
 
-CANDIDATE DETAILS:
-Name: {candidate[1]}
-Location: {candidate[2]}
-Applied Role: {candidate[3]}
-
-Resume Text:
-{candidate[4]}
-
-Screening Answers:
-{candidate[5]}
-
-Portfolio Links:
-{candidate[6]}
-
-Return the interview script in this exact structure:
-
-1. Opening
-2. Resume Walkthrough
-3. Role-Specific Questions
-4. Client-Specific Probes
-5. Reliability Questions
-6. Schedule Alignment
-7. Location / Travel Alignment
-8. Compensation Alignment
-9. Risk Clarification
-10. Candidate Questions
-11. Closing
+Important:
+- Generate only the usable interview script.
+- Do not evaluate the candidate.
+- Do not rank, score, pass, fail, or label the candidate.
+- Do not include internal mapping notes.
+- Do not mention knowledge files, source files, workbook tabs, or hidden reasoning.
+- Use the default script structure and natural Shin-style tone.
+- Tailor the questions to the resume, screening answers, mapped client needs, role, compensation, location, schedule, and risks.
+- Use exact compensation details from the client information when available.
+- Do not invent compensation if it is missing.
+- Keep protected-topic rules in mind.
 """
 
 
-def evaluation_prompt(candidate, client, transcript):
+def evaluation_prompt(candidate, client, transcript_text):
+    candidate_text = candidate_to_text(candidate)
+    client_text = client_to_text(client)
+
     return f"""
-You are REPP Talent's interview evaluator.
+{GLOBAL_RECRUITING_GUARDRAILS}
 
-Evaluate the candidate strictly against the client needs using the resume, screening answers, and interview transcript.
+{INTERVIEW_EVALUATOR_INSTRUCTIONS}
 
-Do not be overly positive.
-Do not ignore risks.
-Do not rely only on resume strength.
-Make a real recruiting recommendation.
-Client-specific requirements override general hiring assumptions.
+Candidate Information:
+{candidate_text}
 
-Use a 5-star rating system:
-5 stars = Excellent fit
-4 stars = Strong fit
-3 stars = Possible fit, needs clarification
-2 stars = Weak fit
-1 star = No-Go
+Mapped Client Information:
+{client_text}
 
-CLIENT DETAILS:
-Client Name: {client[1]}
-Role: {client[2]}
-Location: {client[3]}
-Client Needs / Pay: {client[4]}
-Client Needs / Schedule: {client[5]}
-Client Needs / Must-Haves: {client[6]}
-Client Needs / Nice-to-Haves: {client[7]}
-Client Needs / Disqualifiers: {client[8]}
-Client Needs / Evaluation Rules: {client[9]}
+Interview Transcript:
+{transcript_text}
 
-CANDIDATE DETAILS:
-Name: {candidate[1]}
-Location: {candidate[2]}
-Applied Role: {candidate[3]}
-
-Resume Text:
-{candidate[4]}
-
-Screening Answers:
-{candidate[5]}
-
-Portfolio Links:
-{candidate[6]}
-
-INTERVIEW TRANSCRIPT:
-{transcript}
-
-Evaluate:
-- Client fit
-- Reliability
-- Communication
-- Schedule alignment
-- Location alignment
-- Compensation alignment
-- Motivation
-- Coachability
-- Experience relevance
-- Red flags
-- Whether REPP should move them forward
-
-Return in this exact format:
-
-Star Rating:
-Recommendation:
-Client Fit Summary:
-Strengths:
-Risks:
-Possible Disqualifiers:
-Communication Assessment:
-Reliability Assessment:
-Schedule Alignment:
-Location / Travel Alignment:
-Compensation Alignment:
-Motivation Assessment:
-Coachability Assessment:
-Client-Facing Brief:
-Internal Notes:
-Final Recommendation:
-"""
-
-
-def client_facing_brief_prompt(candidate, client, evaluation):
-    return f"""
-You are REPP Talent's client-facing candidate brief writer.
-
-Create a professional, concise client-facing brief for the candidate.
-
-Do not expose internal reasoning.
-Do not mention star rating unless specifically useful.
-Do not sound robotic.
-Do not oversell the candidate.
-Include strengths and considerations honestly.
-
-CLIENT DETAILS:
-Client Name: {client[1]}
-Role: {client[2]}
-Location: {client[3]}
-Client Needs: {client[4]}
-
-CANDIDATE DETAILS:
-Name: {candidate[1]}
-Location: {candidate[2]}
-Applied Role: {candidate[3]}
-Resume Text:
-{candidate[4]}
-
-Screening Answers:
-{candidate[5]}
-
-Portfolio Links:
-{candidate[6]}
-
-EVALUATION:
-{evaluation}
-
-Return in this format:
-
-Candidate:
-Role:
-Location:
-
-Overview:
-Relevant Experience:
-Why They May Fit:
-Considerations:
-Availability / Schedule:
-Compensation Alignment:
-Portfolio / Links:
-Recommended Next Step:
-"""
-
-
-def ranking_prompt(candidates_text, client):
-    return f"""
-You are REPP Talent's candidate ranking assistant.
-
-Rank candidates against the client needs.
-Use client-specific requirements as the source of truth.
-Do not rank based only on resume polish.
-Prioritize fit, reliability, schedule, location, communication, and client-specific disqualifiers.
-
-CLIENT DETAILS:
-Client Name: {client[1]}
-Role: {client[2]}
-Location: {client[3]}
-Client Needs / Pay: {client[4]}
-Client Needs / Schedule: {client[5]}
-Client Needs / Must-Haves: {client[6]}
-Client Needs / Nice-to-Haves: {client[7]}
-Client Needs / Disqualifiers: {client[8]}
-Client Needs / Evaluation Rules: {client[9]}
-
-CANDIDATES:
-{candidates_text}
-
-Return in this format:
-
-Overall Ranking:
-1.
-2.
-3.
-
-Top Recommendation:
-Backup Recommendations:
-Do Not Prioritize:
-Key Risks Across the Pool:
-Client Notes:
+Important:
+- Treat the transcript as primary behavioral evidence.
+- Evaluate against the mapped client's actual needs.
+- Use resume and screening answers as supporting context only.
+- Actively check for competing business risk.
+- Actively check for Real Estate license conflict.
+- Do not invent concerns.
+- Do not overpraise.
+- Make a real recruiting decision.
+- Use the required output format exactly.
 """
