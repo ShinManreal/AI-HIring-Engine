@@ -1,229 +1,160 @@
 import os
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
 
+AI_PROVIDER = os.getenv("AI_PROVIDER", "openrouter").strip().lower()
 
-AI_PROVIDER = os.getenv("AI_PROVIDER", "openai").strip().lower()
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20250514")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
+LIQUID_THINKING_MODEL = os.getenv(
+    "LIQUID_THINKING_MODEL",
+    "liquid/lfm-2.5-1.2b-thinking:free"
+)
 
+LIQUID_INSTRUCT_MODEL = os.getenv(
+    "LIQUID_INSTRUCT_MODEL",
+    "liquid/lfm-2.5-1.2b-instruct:free"
+)
+
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 SYSTEM_PROMPT = """
-You are an expert recruiting assistant for REPP Talent.
+You are REPP Talent's recruiting AI assistant.
 
-You help format client hiring needs, screen candidates, create tailored interview scripts,
-match candidates to clients, parse resumes, and evaluate interview transcripts.
+You help screen candidates, summarize profiles, create interview scripts,
+evaluate interview transcripts, and match candidates to client needs.
 
-Recruiting standards:
-- Be structured, practical, strict, and clear.
-- Do not overpraise candidates.
-- Do not invent facts.
-- Prioritize client-specific needs.
-- Use resume, screening answers, client needs, and transcript evidence.
-- Surface risks early.
-- Make useful recruiting judgments.
+Rules:
+- Be direct, practical, and recruiter-friendly.
+- Use only the information provided.
+- Do not invent candidate details, resume facts, client needs, or transcript details.
+- Do not reference protected classes or sensitive personal traits.
+- Focus only on job-relevant evidence.
+- Prioritize client-specific requirements over general assumptions.
 """
 
 
-def generate_with_openai(prompt):
-    try:
-        from openai import OpenAI
+def choose_liquid_model(prompt: str) -> str:
+    prompt_lower = prompt.lower()
 
-        api_key = os.getenv("OPENAI_API_KEY")
+    thinking_keywords = [
+        "evaluate",
+        "evaluation",
+        "transcript",
+        "screen",
+        "screening",
+        "risk",
+        "recommendation",
+        "rank",
+        "match",
+        "mapping",
+        "client fit",
+        "client needs",
+        "decision",
+        "no-go",
+        "proceed",
+        "clarification"
+    ]
 
-        if not api_key:
-            return """
-OpenAI is selected, but OPENAI_API_KEY is missing.
+    if any(keyword in prompt_lower for keyword in thinking_keywords):
+        return LIQUID_THINKING_MODEL
+
+    return LIQUID_INSTRUCT_MODEL
+
+
+def generate_with_openrouter(prompt: str, model: str | None = None) -> str:
+    if not OPENROUTER_API_KEY:
+        return """
+OpenRouter is selected, but OPENROUTER_API_KEY is missing.
 
 How to fix:
-Add this to your Render environment variables:
+Add this to your .env and Render environment variables:
 
-AI_PROVIDER=openai
-OPENAI_API_KEY=your_openai_api_key_here
-OPENAI_MODEL=gpt-5.5
-
-Then redeploy.
+AI_PROVIDER=openrouter
+OPENROUTER_API_KEY=your_openrouter_api_key_here
+LIQUID_THINKING_MODEL=liquid/lfm-2.5-1.2b-thinking:free
+LIQUID_INSTRUCT_MODEL=liquid/lfm-2.5-1.2b-instruct:free
 """
 
-        client = OpenAI(api_key=api_key)
+    selected_model = model or choose_liquid_model(prompt)
 
-        response = client.responses.create(
-            model=OPENAI_MODEL,
-            instructions=SYSTEM_PROMPT,
-            input=prompt,
-            temperature=0.2,
-            max_output_tokens=4000
-        )
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://repphiringengine.onrender.com",
+        "X-Title": "REPP Talent AI Hiring Engine"
+    }
 
-        return response.output_text.strip()
-
-    except Exception as error:
-        return f"""
-OpenAI AI engine is not available right now.
-
-Selected provider:
-OpenAI
-
-Model:
-{OPENAI_MODEL}
-
-Reason:
-{str(error)}
-
-How to fix:
-1. Check that OPENAI_API_KEY is correct in Render environment variables.
-2. Check that openai is installed:
-   pip install openai
-3. Check that the model name is valid.
-4. Redeploy Render.
-
-Temporary result:
-The app did not crash, but OpenAI output could not be generated.
-"""
-
-
-def generate_with_ollama(prompt):
-    try:
-        import ollama
-
-        response = ollama.chat(
-            model=OLLAMA_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": SYSTEM_PROMPT
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            options={
-                "temperature": 0.2
+    payload = {
+        "model": selected_model,
+        "messages": [
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT
+            },
+            {
+                "role": "user",
+                "content": prompt
             }
-        )
+        ],
+        "temperature": 0.2,
+        "max_tokens": 4000
+    }
 
-        return response["message"]["content"]
-
-    except Exception as error:
-        return f"""
-AI engine is not available right now.
-
-Selected provider:
-Ollama
-
-Reason:
-{str(error)}
-
-Most likely cause:
-Ollama is not running in this environment.
-
-How to fix:
-1. Open a new terminal.
-2. Run:
-   ollama serve
-3. In another terminal, run:
-   ollama pull {OLLAMA_MODEL}
-4. Restart Streamlit.
-
-Temporary result:
-The app did not crash, but AI output could not be generated.
-"""
-
-
-def generate_with_claude(prompt):
     try:
-        from anthropic import Anthropic
-
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-
-        if not api_key:
-            return """
-Claude is selected, but ANTHROPIC_API_KEY is missing.
-
-How to fix:
-Add this to your environment variables:
-
-ANTHROPIC_API_KEY=your_anthropic_api_key_here
-AI_PROVIDER=claude
-CLAUDE_MODEL=claude-sonnet-4-5-20250514
-
-Then restart or redeploy.
-"""
-
-        client = Anthropic(api_key=api_key)
-
-        message = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=4000,
-            temperature=0.2,
-            system=SYSTEM_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
+        response = requests.post(
+            OPENROUTER_URL,
+            headers=headers,
+            json=payload,
+            timeout=120
         )
 
-        text_parts = []
-
-        for content_block in message.content:
-            if hasattr(content_block, "text"):
-                text_parts.append(content_block.text)
-
-        return "\n".join(text_parts).strip()
-
-    except Exception as error:
-        return f"""
-Claude AI engine is not available right now.
-
-Selected provider:
-Claude
+        if response.status_code != 200:
+            return f"""
+OpenRouter request failed.
 
 Model:
-{CLAUDE_MODEL}
+{selected_model}
+
+Status code:
+{response.status_code}
+
+Response:
+{response.text}
+"""
+
+        data = response.json()
+
+        return (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+
+    except Exception as error:
+        return f"""
+OpenRouter AI engine is not available right now.
+
+Selected model:
+{selected_model}
 
 Reason:
 {str(error)}
-
-How to fix:
-1. Check that ANTHROPIC_API_KEY is correct.
-2. Check that anthropic is installed:
-   pip install anthropic
-3. Check that the model name is valid.
-4. Restart or redeploy.
-
-Temporary result:
-The app did not crash, but Claude output could not be generated.
 """
 
 
-def generate_ai_response(prompt):
-    if AI_PROVIDER == "openai":
-        return generate_with_openai(prompt)
-
-    if AI_PROVIDER == "claude":
-        return generate_with_claude(prompt)
-
-    if AI_PROVIDER == "ollama":
-        return generate_with_ollama(prompt)
+def generate_ai_response(prompt: str) -> str:
+    if AI_PROVIDER == "openrouter":
+        return generate_with_openrouter(prompt)
 
     return f"""
-Invalid AI_PROVIDER value:
+Unsupported AI_PROVIDER: {AI_PROVIDER}
 
-{AI_PROVIDER}
+Set this in .env and Render:
 
-Use one of these:
-
-AI_PROVIDER=openai
-AI_PROVIDER=claude
-AI_PROVIDER=ollama
+AI_PROVIDER=openrouter
+OPENROUTER_API_KEY=your_openrouter_api_key_here
 """
-
-
-def ask_ai(prompt):
-    return generate_ai_response(prompt)

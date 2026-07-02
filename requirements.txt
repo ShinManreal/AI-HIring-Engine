@@ -14,4 +14,7 @@ fastapi
 uvicorn
 pydantic
 httpx
-websockets
+websocketsrequests
+python-dotenv
+requests
+python-dotenv
