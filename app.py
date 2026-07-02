@@ -41,6 +41,8 @@ from prompts import (
     evaluation_prompt
 )
 
+from calendly_integration import get_candidate_calendly_booking
+
 
 load_dotenv()
 
@@ -942,8 +944,58 @@ def candidate_has_resume(candidate):
     return True
 
 
-def show_missing_resume_banner():
-    st.error("Please Upload the candidate's Resume")
+def show_calendly_booking_status(candidate):
+    candidate_name = candidate[1] or ""
+    candidate_email = candidate[8] or ""
+
+    booking = get_candidate_calendly_booking(candidate_name, candidate_email)
+
+    if booking.get("booked"):
+        st.markdown(
+            f"""
+            <div style="
+                background-color:#D1FAE5;
+                border:1px solid #10B981;
+                color:#064E3B;
+                padding:14px 16px;
+                border-radius:10px;
+                margin-top:12px;
+                margin-bottom:12px;
+                font-weight:600;">
+                ✅ Booked<br>
+                Date: {booking.get("date") or "Not specified"}<br>
+                Time: {booking.get("time") or "Not specified"}<br>
+                Interviewer: {booking.get("interviewer") or "Not specified"}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        return
+
+    if booking.get("status") == "Calendly Error":
+        st.warning(f"Calendly check failed: {booking.get('error')}")
+        return
+
+    if booking.get("status") == "Calendly Not Configured":
+        st.warning("Calendly API key is not configured yet.")
+        return
+
+    st.markdown(
+        """
+        <div style="
+            background-color:#DC2626;
+            border:1px solid #991B1B;
+            color:white;
+            padding:14px 16px;
+            border-radius:10px;
+            margin-top:12px;
+            margin-bottom:12px;
+            font-weight:700;">
+            ❌ Not Yet Booked
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 
 def parse_uploaded_resume_file(uploaded_file):
