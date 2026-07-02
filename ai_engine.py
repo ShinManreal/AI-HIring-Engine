@@ -6,17 +6,17 @@ load_dotenv()
 
 AI_PROVIDER = os.getenv("AI_PROVIDER", "openrouter").strip().lower()
 
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 
 LIQUID_THINKING_MODEL = os.getenv(
     "LIQUID_THINKING_MODEL",
     "liquid/lfm-2.5-1.2b-thinking:free"
-)
+).strip()
 
 LIQUID_INSTRUCT_MODEL = os.getenv(
     "LIQUID_INSTRUCT_MODEL",
     "liquid/lfm-2.5-1.2b-instruct:free"
-)
+).strip()
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -37,7 +37,7 @@ Rules:
 
 
 def choose_liquid_model(prompt: str) -> str:
-    prompt_lower = prompt.lower()
+    prompt_lower = str(prompt or "").lower()
 
     thinking_keywords = [
         "evaluate",
@@ -55,7 +55,11 @@ def choose_liquid_model(prompt: str) -> str:
         "decision",
         "no-go",
         "proceed",
-        "clarification"
+        "clarification",
+        "compare",
+        "score",
+        "finalist",
+        "red flag"
     ]
 
     if any(keyword in prompt_lower for keyword in thinking_keywords):
@@ -96,7 +100,7 @@ LIQUID_INSTRUCT_MODEL=liquid/lfm-2.5-1.2b-instruct:free
             },
             {
                 "role": "user",
-                "content": prompt
+                "content": str(prompt or "")
             }
         ],
         "temperature": 0.2,
@@ -127,12 +131,43 @@ Response:
 
         data = response.json()
 
-        return (
+        content = (
             data.get("choices", [{}])[0]
             .get("message", {})
             .get("content", "")
-            .strip()
         )
+
+        if isinstance(content, list):
+            content = "\n".join(
+                item.get("text", "")
+                for item in content
+                if isinstance(item, dict)
+            )
+
+        content = str(content or "").strip()
+
+        if not content:
+            return f"""
+OpenRouter returned an empty response.
+
+Model:
+{selected_model}
+
+Raw response:
+{data}
+"""
+
+        return content
+
+    except requests.exceptions.Timeout:
+        return f"""
+OpenRouter request timed out.
+
+Model:
+{selected_model}
+
+Try again, or use a shorter resume/transcript.
+"""
 
     except Exception as error:
         return f"""
@@ -151,10 +186,25 @@ def generate_ai_response(prompt: str) -> str:
         return generate_with_openrouter(prompt)
 
     return f"""
-Unsupported AI_PROVIDER: {AI_PROVIDER}
+Invalid AI_PROVIDER value:
 
-Set this in .env and Render:
+{AI_PROVIDER}
+
+Use this setting:
 
 AI_PROVIDER=openrouter
+
+Required Render variables:
+
 OPENROUTER_API_KEY=your_openrouter_api_key_here
+LIQUID_THINKING_MODEL=liquid/lfm-2.5-1.2b-thinking:free
+LIQUID_INSTRUCT_MODEL=liquid/lfm-2.5-1.2b-instruct:free
 """
+
+
+def ask_ai(prompt: str) -> str:
+    """
+    Backward-compatible function for app.py.
+    Your Streamlit app already imports and calls ask_ai().
+    """
+    return generate_ai_response(prompt)
