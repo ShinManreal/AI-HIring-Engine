@@ -656,6 +656,15 @@ def get_client_formatted_needs(client):
     return client[4] or ""
 
 
+def get_supabase_client_name(client):
+    if not client:
+        return "Unnamed Client"
+
+    # Supabase clients.client_name column
+    # Current tuple position from supabase_database.py: client[1]
+    return client[1] or "Unnamed Client"
+
+
 def status_tab_label(status):
     label_map = {
         "Prospects": "Prospect",
@@ -1761,7 +1770,7 @@ with clients_tab:
         else:
             for client in clients:
                 client_id = client[0]
-                client_name = get_client_display_name(client) or "Unnamed Client"
+                client_name = get_supabase_client_name(client)
                 client_status = get_client_status(client)
 
                 with st.container(border=True):
@@ -1794,7 +1803,7 @@ with clients_tab:
 
             st.divider()
 
-            client_name = get_client_display_name(client) or "Unnamed Client"
+            client_name = get_supabase_client_name(client)
             client_needs = get_client_formatted_needs(client)
             client_status = get_client_status(client)
 
