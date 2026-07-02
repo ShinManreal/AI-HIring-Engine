@@ -963,3 +963,420 @@ def import_clients_csv(
         "skipped_invalid": skipped_invalid,
         "rule": "Client duplicates are skipped only when client_name + location + role all match. Same client with different role is allowed."
     }
+
+
+# ============================================================
+# CALENDLY SYNC FOR GPT ACTIONS
+# ============================================================
+
+import requests
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+
+CALENDLY_API_KEY = os.getenv("CALENDLY_API_KEY", "").strip()
+CALENDLY_BASE_URL = "https://api.calendly.com"
+CALENDLY_DISPLAY_TIMEZONE = os.getenv("CALENDLY_DISPLAY_TIMEZONE", "Asia/Manila").strip()
+CALENDLY_LOOKBACK_DAYS = int(os.getenv("CALENDLY_LOOKBACK_DAYS", "90"))
+CALENDLY_LOOKAHEAD_DAYS = int(os.getenv("CALENDLY_LOOKAHEAD_DAYS", "120"))
+CALENDLY_EVENT_LIMIT = int(os.getenv("CALENDLY_EVENT_LIMIT", "100"))
+
+
+class CalendlyCandidateRequest(BaseModel):
+    identifier: str
+    update_supabase: bool = True
+
+
+class CalendlyRecentSyncRequest(BaseModel):
+    update_supabase: bool = True
+    lookback_days: int = CALENDLY_LOOKBACK_DAYS
+    lookahead_days: int = CALENDLY_LOOKAHEAD_DAYS
+    max_events: int = CALENDLY_EVENT_LIMIT
+
+
+def calendly_headers():
+    if not CALENDLY_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="CALENDLY_API_KEY is not configured on the API service."
+        )
+
+    return {
+        "Authorization": f"Bearer {CALENDLY_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+
+def calendly_get(path, params=None):
+    response = requests.get(
+        f"{CALENDLY_BASE_URL}{path}",
+        headers=calendly_headers(),
+        params=params or {},
+        timeout=60,
+    )
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=f"Calendly API error: {response.text}"
+        )
+
+    return response.json()
+
+
+def get_calendly_user_context():
+    data = calendly_get("/users/me")
+    resource = data.get("resource") or {}
+
+    return {
+        "user_uri": resource.get("uri") or "",
+        "organization_uri": resource.get("current_organization") or "",
+        "name": resource.get("name") or "",
+        "email": resource.get("email") or "",
+    }
+
+
+def parse_calendly_uuid(uri):
+    return str(uri or "").rstrip("/").split("/")[-1]
+
+
+def list_calendly_events(lookback_days=None, lookahead_days=None, max_events=None):
+    context = get_calendly_user_context()
+
+    lookback_days = lookback_days if lookback_days is not None else CALENDLY_LOOKBACK_DAYS
+    lookahead_days = lookahead_days if lookahead_days is not None else CALENDLY_LOOKAHEAD_DAYS
+    max_events = max_events if max_events is not None else CALENDLY_EVENT_LIMIT
+
+    now = datetime.now(timezone.utc)
+    min_start_time = (now - timedelta(days=lookback_days)).isoformat().replace("+00:00", "Z")
+    max_start_time = (now + timedelta(days=lookahead_days)).isoformat().replace("+00:00", "Z")
+
+    params = {
+        "min_start_time": min_start_time,
+        "max_start_time": max_start_time,
+        "sort": "start_time:desc",
+        "count": min(max_events, 100),
+    }
+
+    if context["organization_uri"]:
+        params["organization"] = context["organization_uri"]
+    else:
+        params["user"] = context["user_uri"]
+
+    data = calendly_get("/scheduled_events", params=params)
+    return data.get("collection") or []
+
+
+def list_event_invitees(event_uri):
+    event_uuid = parse_calendly_uuid(event_uri)
+
+    if not event_uuid:
+        return []
+
+    data = calendly_get(
+        f"/scheduled_events/{event_uuid}/invitees",
+        params={"count": 100},
+    )
+
+    return data.get("collection") or []
+
+
+def normalize_match_text(value):
+    return str(value or "").strip().lower()
+
+
+def names_look_related(candidate_name, invitee_name):
+    candidate_name = normalize_match_text(candidate_name)
+    invitee_name = normalize_match_text(invitee_name)
+
+    if not candidate_name or not invitee_name:
+        return False
+
+    if candidate_name == invitee_name:
+        return True
+
+    if candidate_name in invitee_name or invitee_name in candidate_name:
+        return True
+
+    candidate_parts = [part for part in candidate_name.split() if len(part) > 1]
+    invitee_parts = [part for part in invitee_name.split() if len(part) > 1]
+
+    if len(candidate_parts) >= 2:
+        first_name = candidate_parts[0]
+        last_name = candidate_parts[-1]
+        return first_name in invitee_parts and last_name in invitee_parts
+
+    return False
+
+
+def event_interviewer_name(event):
+    memberships = event.get("event_memberships") or []
+
+    for membership in memberships:
+        user_name = membership.get("user_name") or ""
+        if user_name:
+            return user_name
+
+    event_name = event.get("name") or ""
+    known_names = ["Claire", "JR", "Shin", "Hernani", "Nani", "Leesa", "Anny"]
+
+    for name in known_names:
+        if name.lower() in event_name.lower():
+            return name
+
+    return "Not specified"
+
+
+def format_calendly_start(start_time):
+    if not start_time:
+        return "", ""
+
+    try:
+        start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+        local_dt = start_dt.astimezone(ZoneInfo(CALENDLY_DISPLAY_TIMEZONE))
+        return local_dt.strftime("%B %d, %Y"), local_dt.strftime("%I:%M %p").lstrip("0")
+    except Exception:
+        return start_time, ""
+
+
+def find_candidate_calendly_booking(candidate):
+    candidate_name = candidate.get("candidate_name") or ""
+    candidate_email = normalize_match_text(candidate.get("email"))
+
+    events = list_calendly_events()
+
+    for event in events:
+        event_uri = event.get("uri") or ""
+        invitees = list_event_invitees(event_uri)
+
+        for invitee in invitees:
+            if invitee.get("canceled"):
+                continue
+
+            invitee_email = normalize_match_text(invitee.get("email"))
+            invitee_name = invitee.get("name") or ""
+
+            email_matches = bool(candidate_email and invitee_email and candidate_email == invitee_email)
+            name_matches = names_look_related(candidate_name, invitee_name)
+
+            if not email_matches and not name_matches:
+                continue
+
+            date_text, time_text = format_calendly_start(event.get("start_time") or "")
+
+            return {
+                "booked": True,
+                "status": "Booked",
+                "event_uri": event_uri,
+                "event_name": event.get("name") or "",
+                "invitee_uri": invitee.get("uri") or "",
+                "invitee_name": invitee_name,
+                "invitee_email": invitee.get("email") or "",
+                "interview_date": event.get("start_time") or "",
+                "interview_date_text": date_text,
+                "interview_time_text": time_text,
+                "interviewer": event_interviewer_name(event),
+            }
+
+    return {
+        "booked": False,
+        "status": "Not Yet Booked",
+        "event_uri": "",
+        "event_name": "",
+        "invitee_uri": "",
+        "invitee_name": "",
+        "invitee_email": "",
+        "interview_date": "",
+        "interview_date_text": "",
+        "interview_time_text": "",
+        "interviewer": "",
+    }
+
+
+def update_candidate_calendly_columns(candidate_id, booking):
+    payload = {
+        "calendly_booked": bool(booking.get("booked")),
+        "calendly_event_uri": booking.get("event_uri") or "",
+        "calendly_event_name": booking.get("event_name") or "",
+        "calendly_invitee_uri": booking.get("invitee_uri") or "",
+        "calendly_invitee_name": booking.get("invitee_name") or "",
+        "calendly_invitee_email": booking.get("invitee_email") or "",
+        "calendly_interview_date": booking.get("interview_date") or None,
+        "calendly_interview_date_text": booking.get("interview_date_text") or "",
+        "calendly_interview_time_text": booking.get("interview_time_text") or "",
+        "calendly_interviewer": booking.get("interviewer") or "",
+        "calendly_status": booking.get("status") or "",
+        "calendly_last_checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    current_candidate = get_candidate_dict(candidate_id) or {}
+    current_stage = current_candidate.get("workflow_stage") or ""
+
+    if booking.get("booked") and current_stage != "Interview Done":
+        payload["workflow_stage"] = "Interviewing"
+
+    response = (
+        supabase.table("candidates")
+        .update(payload)
+        .eq("id", candidate_id)
+        .execute()
+    )
+
+    data = rows(response)
+    return candidate_row_to_dict(data[0]) if data else get_candidate_dict(candidate_id)
+
+
+def calendly_duplicate_summary(candidate, booking=None):
+    booking = booking or {}
+
+    return {
+        "Name": candidate.get("candidate_name") or "",
+        "Client": candidate.get("matched_client_name") or "",
+        "Location": candidate.get("location") or "",
+        "Status": candidate.get("candidate_status") or "",
+        "Workflow Stage": candidate.get("workflow_stage") or "",
+        "Interview Date": (
+            booking.get("interview_date_text")
+            or candidate.get("calendly_interview_date_text")
+            or candidate.get("calendly_interview_date")
+            or ""
+        ),
+        "Interview Time": (
+            booking.get("interview_time_text")
+            or candidate.get("calendly_interview_time_text")
+            or ""
+        ),
+        "Interviewer": (
+            booking.get("interviewer")
+            or candidate.get("calendly_interviewer")
+            or ""
+        ),
+        "Evaluation Outcome": candidate.get("evaluation_outcome") or "",
+    }
+
+
+@app.post("/api/calendly/check-candidate-booking")
+def check_candidate_calendly_booking(
+    request: CalendlyCandidateRequest,
+    x_api_key: str = Header(default="")
+):
+    check_api_key(x_api_key)
+
+    candidate = resolve_candidate(request.identifier)
+
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found.")
+
+    booking = find_candidate_calendly_booking(candidate)
+    updated_candidate = None
+
+    if request.update_supabase:
+        updated_candidate = update_candidate_calendly_columns(candidate["id"], booking)
+
+    return {
+        "status": "checked",
+        "candidate": updated_candidate or candidate,
+        "booking": booking,
+        "duplicate_display": calendly_duplicate_summary(updated_candidate or candidate, booking),
+    }
+
+
+@app.post("/api/calendly/sync-candidate-booking")
+def sync_candidate_calendly_booking(
+    request: CalendlyCandidateRequest,
+    x_api_key: str = Header(default="")
+):
+    check_api_key(x_api_key)
+
+    candidate = resolve_candidate(request.identifier)
+
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found.")
+
+    booking = find_candidate_calendly_booking(candidate)
+    updated_candidate = update_candidate_calendly_columns(candidate["id"], booking)
+
+    return {
+        "status": "synced",
+        "candidate": updated_candidate,
+        "booking": booking,
+        "duplicate_display": calendly_duplicate_summary(updated_candidate, booking),
+    }
+
+
+@app.post("/api/calendly/sync-recent-bookings")
+def sync_recent_calendly_bookings(
+    request: CalendlyRecentSyncRequest,
+    x_api_key: str = Header(default="")
+):
+    check_api_key(x_api_key)
+
+    events = list_calendly_events(
+        lookback_days=request.lookback_days,
+        lookahead_days=request.lookahead_days,
+        max_events=request.max_events,
+    )
+
+    synced = []
+    unmatched = []
+
+    for event in events:
+        invitees = list_event_invitees(event.get("uri") or "")
+
+        for invitee in invitees:
+            if invitee.get("canceled"):
+                continue
+
+            invitee_email = invitee.get("email") or ""
+            invitee_name = invitee.get("name") or ""
+
+            candidate = resolve_candidate(invitee_email) if invitee_email else None
+
+            if not candidate and invitee_name:
+                candidate = resolve_candidate(invitee_name)
+
+            date_text, time_text = format_calendly_start(event.get("start_time") or "")
+
+            booking = {
+                "booked": True,
+                "status": "Booked",
+                "event_uri": event.get("uri") or "",
+                "event_name": event.get("name") or "",
+                "invitee_uri": invitee.get("uri") or "",
+                "invitee_name": invitee_name,
+                "invitee_email": invitee_email,
+                "interview_date": event.get("start_time") or "",
+                "interview_date_text": date_text,
+                "interview_time_text": time_text,
+                "interviewer": event_interviewer_name(event),
+            }
+
+            if candidate:
+                updated_candidate = (
+                    update_candidate_calendly_columns(candidate["id"], booking)
+                    if request.update_supabase
+                    else candidate
+                )
+
+                synced.append({
+                    "candidate": updated_candidate,
+                    "booking": booking,
+                    "duplicate_display": calendly_duplicate_summary(updated_candidate, booking),
+                })
+            else:
+                unmatched.append({
+                    "invitee_name": invitee_name,
+                    "invitee_email": invitee_email,
+                    "event_name": event.get("name") or "",
+                    "interview_date": date_text,
+                    "interview_time": time_text,
+                    "interviewer": event_interviewer_name(event),
+                })
+
+    return {
+        "status": "recent_bookings_synced",
+        "synced_count": len(synced),
+        "unmatched_count": len(unmatched),
+        "synced": synced,
+        "unmatched": unmatched,
+    }
