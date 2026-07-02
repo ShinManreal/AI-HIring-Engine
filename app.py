@@ -627,6 +627,59 @@ def get_client_display_name(client):
     return contact_name or client_name_from_notes or saved_client_name or company_name
 
 
+def get_client_status(client):
+    if not client:
+        return "Not specified"
+
+    # Future-proofing:
+    # If a client_status column is later added to the client tuple, this will display it.
+    if len(client) > 10 and client[10]:
+        return str(client[10])
+
+    client_needs = client[9] or client[4] or ""
+    extracted_status = (
+        extract_field_from_notes(client_needs, "Status")
+        or extract_field_from_notes(client_needs, "Hiring Status")
+        or extract_field_from_notes(client_needs, "Request Status")
+    )
+
+    return extracted_status or "Active"
+
+
+def get_client_formatted_needs(client):
+    if not client:
+        return ""
+
+    if len(client) > 9 and client[9]:
+        return client[9]
+
+    return client[4] or ""
+
+
+def status_tab_label(status):
+    label_map = {
+        "Prospects": "Prospect",
+        "Screen - PASS": "Screen - PASS",
+        "Initial Interview": "Initial Interview",
+        "Pass: Ready for Leesa": "Passed to Leesa",
+        "Leesa Interview": "Leesa Interview",
+        "Leesa Interview Complete": "Leesa Complete",
+        "Potential Finalists": "Potential Finalists",
+        "NO SHOWS": "No Shows",
+        "Presented to Client": "Presented",
+        "Hired": "Hired",
+        "VA's Passed but Not Hired": "VA Passed Not Hired",
+        "Passed but Not Hired": "Passed Not Hired",
+        "BACKUP Candidates": "Backups",
+        "#NOPE": "#NOPE"
+    }
+
+    return label_map.get(status, status)
+
+
+CANDIDATE_STATUS_TAB_OPTIONS = ["All"] + CANDIDATE_STATUS_OPTIONS
+
+
 def role_uses_ai_need_matching(applied_role):
     return applied_role in REMOTE_NEED_MATCH_ROLES
 
@@ -1172,14 +1225,16 @@ require_app_login()
 st.markdown("## AI Hiring Engine")
 
 if is_admin_user():
-    top_tabs = st.tabs(["Dashboard", "Candidates", "Admin Center"])
+    top_tabs = st.tabs(["Dashboard", "Candidates", "Clients", "Admin Center"])
     dashboard_tab = top_tabs[0]
     candidates_tab = top_tabs[1]
-    admin_center_tab = top_tabs[2]
+    clients_tab = top_tabs[2]
+    admin_center_tab = top_tabs[3]
 else:
-    top_tabs = st.tabs(["Dashboard", "Candidates"])
+    top_tabs = st.tabs(["Dashboard", "Candidates", "Clients"])
     dashboard_tab = top_tabs[0]
     candidates_tab = top_tabs[1]
+    clients_tab = top_tabs[2]
     admin_center_tab = None
 
 logout_button()
@@ -1219,13 +1274,13 @@ with candidates_tab:
     if "candidate_search_term" not in st.session_state:
         st.session_state.candidate_search_term = ""
 
-    if "candidate_search_offset" not in st.session_state:
-        st.session_state.candidate_search_offset = 0
+    if "candidate_search_offset_by_status" not in st.session_state:
+        st.session_state.candidate_search_offset_by_status = {}
 
     if st.session_state.selected_candidate_profile_id is None:
         st.subheader("Search Candidate")
 
-        col_search, col_status, col_role = st.columns([2, 1, 1])
+        col_search, col_role = st.columns([2, 1])
 
         with col_search:
             search_term = st.text_input(
@@ -1233,13 +1288,6 @@ with candidates_tab:
                 placeholder="Name, email, phone, city, role, status, or mapped client",
                 value=st.session_state.candidate_search_term,
                 key="candidate_search_input"
-            )
-
-        with col_status:
-            status_filter = st.selectbox(
-                "Status Filter",
-                [""] + CANDIDATE_STATUS_OPTIONS,
-                key="candidate_status_filter"
             )
 
         with col_role:
@@ -1254,79 +1302,99 @@ with candidates_tab:
         with col_a:
             if st.button("Search", use_container_width=True):
                 st.session_state.candidate_search_term = search_term
-                st.session_state.candidate_search_offset = 0
+                st.session_state.candidate_search_offset_by_status = {}
                 st.rerun()
 
         with col_b:
             if st.button("Clear Search", use_container_width=True):
                 st.session_state.candidate_search_term = ""
-                st.session_state.candidate_search_offset = 0
+                st.session_state.candidate_search_offset_by_status = {}
                 st.rerun()
 
-        limit = 25
-        offset = st.session_state.candidate_search_offset
+        st.caption("Use the status tabs below to view candidates by category.")
 
-        candidates = search_candidates(
-            search_term=st.session_state.candidate_search_term,
-            status_filter=status_filter,
-            role_filter=role_filter,
-            limit=limit,
-            offset=offset
-        )
+        status_tabs = st.tabs([status_tab_label(status) for status in CANDIDATE_STATUS_TAB_OPTIONS])
 
-        st.caption(
-            f"Showing up to {limit} results. This search is database-powered for low-end PC performance."
-        )
+        for tab_index, selected_status in enumerate(CANDIDATE_STATUS_TAB_OPTIONS):
+            with status_tabs[tab_index]:
+                limit = 25
+                offset_key = selected_status
+                offset = st.session_state.candidate_search_offset_by_status.get(offset_key, 0)
+                status_filter = "" if selected_status == "All" else selected_status
 
-        if not candidates:
-            st.info("No candidates found. Search by name, email, phone, role, status, city, or mapped client.")
-        else:
-            for candidate in candidates:
-                candidate_id = candidate[0]
-                candidate_name = candidate[1] or "Unnamed Candidate"
-                candidate_location = candidate[2] or "No Location"
-                applied_role = candidate[3] or "No Role"
-                candidate_status = candidate[10] or "No Status"
-                matched_client = candidate[12] or "No Client"
-                matched_value = candidate[13]
+                candidates = search_candidates(
+                    search_term=st.session_state.candidate_search_term,
+                    status_filter=status_filter,
+                    role_filter=role_filter,
+                    limit=limit,
+                    offset=offset
+                )
 
-                with st.container(border=True):
-                    col_info, col_action = st.columns([4, 1])
+                st.caption(
+                    f"Showing up to {limit} results for {status_tab_label(selected_status)}."
+                )
 
-                    with col_info:
-                        st.markdown(f"### {candidate_name}")
-                        st.write(f"**Role:** {applied_role}")
-                        st.write(f"**Status:** {candidate_status}")
-                        st.write(f"**Location:** {candidate_location}")
-                        st.write(f"**Mapped Client:** {matched_client}")
+                if not candidates:
+                    st.info("No candidates found in this status.")
+                else:
+                    for candidate in candidates:
+                        candidate_id = candidate[0]
+                        candidate_name = candidate[1] or "Unnamed Candidate"
+                        candidate_location = candidate[2] or "No Location"
+                        applied_role = candidate[3] or "No Role"
+                        candidate_status = candidate[10] or "No Status"
+                        matched_client = candidate[12] or "No Client"
+                        matched_value = candidate[13]
 
-                        if matched_value is not None and matched_value != "":
-                            if role_uses_ai_need_matching(applied_role):
-                                st.write(f"**Need Match Score:** {matched_value}")
-                            else:
-                                st.write(f"**Distance:** {matched_value} miles")
+                        with st.container(border=True):
+                            col_info, col_action = st.columns([4, 1])
 
-                        if not candidate_has_resume(candidate):
-                            st.error("Missing Resume")
+                            with col_info:
+                                st.markdown(f"### {candidate_name}")
+                                st.write(f"**Role:** {applied_role}")
+                                st.write(f"**Status:** {candidate_status}")
+                                st.write(f"**Location:** {candidate_location}")
+                                st.write(f"**Mapped Client:** {matched_client}")
 
-                    with col_action:
-                        if st.button("Open", key=f"open_candidate_{candidate_id}", use_container_width=True):
-                            st.session_state.selected_candidate_profile_id = candidate_id
-                            st.rerun()
+                                if matched_value is not None and matched_value != "":
+                                    if role_uses_ai_need_matching(applied_role):
+                                        st.write(f"**Need Match Score:** {matched_value}")
+                                    else:
+                                        st.write(f"**Distance:** {matched_value} miles")
 
-            col_prev, col_next = st.columns(2)
+                                if not candidate_has_resume(candidate):
+                                    st.error("Missing Resume")
 
-            with col_prev:
-                if offset > 0:
-                    if st.button("Previous 25", use_container_width=True):
-                        st.session_state.candidate_search_offset = max(0, offset - limit)
-                        st.rerun()
+                            with col_action:
+                                if st.button(
+                                    "Open",
+                                    key=f"open_candidate_{selected_status}_{candidate_id}",
+                                    use_container_width=True
+                                ):
+                                    st.session_state.selected_candidate_profile_id = candidate_id
+                                    st.rerun()
 
-            with col_next:
-                if len(candidates) == limit:
-                    if st.button("Next 25", use_container_width=True):
-                        st.session_state.candidate_search_offset = offset + limit
-                        st.rerun()
+                    col_prev, col_next = st.columns(2)
+
+                    with col_prev:
+                        if offset > 0:
+                            if st.button(
+                                "Previous 25",
+                                key=f"candidate_prev_{selected_status}",
+                                use_container_width=True
+                            ):
+                                st.session_state.candidate_search_offset_by_status[offset_key] = max(0, offset - limit)
+                                st.rerun()
+
+                    with col_next:
+                        if len(candidates) == limit:
+                            if st.button(
+                                "Next 25",
+                                key=f"candidate_next_{selected_status}",
+                                use_container_width=True
+                            ):
+                                st.session_state.candidate_search_offset_by_status[offset_key] = offset + limit
+                                st.rerun()
 
     else:
         candidate_id = st.session_state.selected_candidate_profile_id
@@ -1647,6 +1715,100 @@ Make a real recruiting decision.
 
                                     st.subheader("Evaluation")
                                     st.write(evaluation)
+
+
+# -----------------------------
+# CLIENTS
+# -----------------------------
+
+with clients_tab:
+    st.header("Clients")
+
+    if "selected_client_profile_id" not in st.session_state:
+        st.session_state.selected_client_profile_id = None
+
+    if "client_search_term" not in st.session_state:
+        st.session_state.client_search_term = ""
+
+    if st.session_state.selected_client_profile_id is None:
+        st.subheader("Search Client")
+
+        client_search_term = st.text_input(
+            "Search Client",
+            placeholder="Client name, company, location, role, or keyword",
+            value=st.session_state.client_search_term,
+            key="client_panel_search_input"
+        )
+
+        col_search, col_clear = st.columns([1, 1])
+
+        with col_search:
+            if st.button("Search Clients", use_container_width=True):
+                st.session_state.client_search_term = client_search_term
+                st.rerun()
+
+        with col_clear:
+            if st.button("Clear Client Search", use_container_width=True):
+                st.session_state.client_search_term = ""
+                st.rerun()
+
+        clients = search_clients(st.session_state.client_search_term, limit=50)
+
+        st.caption("Showing up to 50 clients.")
+
+        if not clients:
+            st.info("No clients found.")
+        else:
+            for client in clients:
+                client_id = client[0]
+                client_name = get_client_display_name(client) or "Unnamed Client"
+                client_status = get_client_status(client)
+
+                with st.container(border=True):
+                    col_info, col_action = st.columns([4, 1])
+
+                    with col_info:
+                        st.markdown(f"### {client_name}")
+                        st.write(f"**Status:** {client_status}")
+
+                    with col_action:
+                        if st.button("Open", key=f"open_client_profile_{client_id}", use_container_width=True):
+                            st.session_state.selected_client_profile_id = client_id
+                            st.rerun()
+
+    else:
+        client_id = st.session_state.selected_client_profile_id
+        client = get_client(client_id)
+
+        if not client:
+            st.error("Client not found.")
+
+            if st.button("← Back to Client Search"):
+                st.session_state.selected_client_profile_id = None
+                st.rerun()
+
+        else:
+            if st.button("← Back to Client Search"):
+                st.session_state.selected_client_profile_id = None
+                st.rerun()
+
+            st.divider()
+
+            client_name = get_client_display_name(client) or "Unnamed Client"
+            client_needs = get_client_formatted_needs(client)
+            client_status = get_client_status(client)
+
+            st.subheader("Client Profile")
+
+            st.write(f"**Name:** {client_name}")
+            st.write(f"**Status:** {client_status}")
+
+            st.markdown("### Client Needs")
+            if client_needs:
+                st.write(client_needs)
+            else:
+                st.info("No AI-formatted client needs saved yet.")
+
 
 
 # -----------------------------
