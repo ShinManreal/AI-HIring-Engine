@@ -201,10 +201,33 @@ LIQUID_THINKING_MODEL=liquid/lfm-2.5-1.2b-thinking:free
 LIQUID_INSTRUCT_MODEL=liquid/lfm-2.5-1.2b-instruct:free
 """
 
-
 def ask_ai(prompt: str) -> str:
     """
     Backward-compatible function for app.py.
     Your Streamlit app already imports and calls ask_ai().
     """
+    return generate_ai_response(prompt)
+
+def generate_ai_response(prompt: str) -> str:
+    if AI_PROVIDER == "openrouter":
+        return generate_with_openrouter(prompt)
+
+    return f"""
+Invalid AI_PROVIDER value:
+
+{AI_PROVIDER}
+
+Use this setting:
+
+AI_PROVIDER=openrouter
+
+Required Render variables:
+
+OPENROUTER_API_KEY=your_openrouter_api_key_here
+LIQUID_THINKING_MODEL=liquid/lfm-2.5-1.2b-thinking:free
+LIQUID_INSTRUCT_MODEL=liquid/lfm-2.5-1.2b-instruct:free
+"""
+
+
+def ask_ai(prompt: str) -> str:
     return generate_ai_response(prompt)
