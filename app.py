@@ -42,6 +42,14 @@ from prompts import (
 )
 
 from calendly_integration import get_candidate_calendly_booking
+from user_settings_manager import (
+    US_TIMEZONE_OPTIONS,
+    THEME_OPTIONS,
+    CHARACTER_SIZE_OPTIONS,
+    get_user_settings,
+    save_user_settings,
+    get_label_from_value
+)
 
 
 load_dotenv()
@@ -80,6 +88,98 @@ def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
 
+def get_login_password_hash(username):
+    user_settings = get_user_settings(username)
+    custom_password_hash = user_settings.get("password_hash", "")
+
+    if custom_password_hash:
+        return custom_password_hash
+
+    return get_secret("APP_PASSWORD_HASH")
+
+
+def get_login_display_name(username):
+    user_settings = get_user_settings(username)
+    custom_display_name = user_settings.get("display_name", "")
+
+    if custom_display_name:
+        return custom_display_name
+
+    return APP_USERS[username]["name"]
+
+
+def get_current_settings():
+    username = st.session_state.get("current_username", "")
+    return get_user_settings(username)
+
+
+def apply_user_visual_settings():
+    if not st.session_state.get("app_logged_in"):
+        return
+
+    settings = get_current_settings()
+    theme = settings.get("theme", "light")
+    character_size = settings.get("character_size", "medium")
+
+    font_size_map = {
+        "small": "14px",
+        "medium": "16px",
+        "large": "18px",
+        "extra_large": "20px",
+    }
+
+    base_font_size = font_size_map.get(character_size, "16px")
+
+    if theme == "dark":
+        st.markdown(
+            f"""
+            <style>
+                .stApp {{
+                    background-color: #0F172A;
+                    color: #E5E7EB;
+                    font-size: {base_font_size};
+                }}
+                [data-testid="stSidebar"] {{
+                    background-color: #111827;
+                    color: #E5E7EB;
+                }}
+                .stMarkdown, .stText, p, div, label, span {{
+                    font-size: {base_font_size};
+                }}
+                h1, h2, h3 {{
+                    color: #F9FAFB;
+                }}
+                [data-testid="stMetric"] {{
+                    background-color: #1F2937;
+                    border-radius: 10px;
+                    padding: 10px;
+                }}
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+    else:
+        st.markdown(
+            f"""
+            <style>
+                .stApp {{
+                    background-color: #FFFFFF;
+                    color: #111827;
+                    font-size: {base_font_size};
+                }}
+                [data-testid="stSidebar"] {{
+                    background-color: #F8FAFC;
+                    color: #111827;
+                }}
+                .stMarkdown, .stText, p, div, label, span {{
+                    font-size: {base_font_size};
+                }}
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+
+
 def homepage_login():
     st.markdown(
         """
@@ -102,15 +202,19 @@ def homepage_login():
         password = st.text_input("Password", type="password", key="homepage_password")
 
         if st.button("Login", use_container_width=True):
-            password_hash = get_secret("APP_PASSWORD_HASH")
+            if username in APP_USERS:
+                password_hash = get_login_password_hash(username)
+                display_name = get_login_display_name(username)
 
-            if username in APP_USERS and hash_password(password) == password_hash:
-                st.session_state.app_logged_in = True
-                st.session_state.current_username = username
-                st.session_state.current_user_name = APP_USERS[username]["name"]
-                st.session_state.current_user_role = APP_USERS[username]["role"]
-                st.success("Login successful.")
-                st.rerun()
+                if hash_password(password) == password_hash:
+                    st.session_state.app_logged_in = True
+                    st.session_state.current_username = username
+                    st.session_state.current_user_name = display_name
+                    st.session_state.current_user_role = APP_USERS[username]["role"]
+                    st.success("Login successful.")
+                    st.rerun()
+                else:
+                    st.error("Invalid username or password.")
             else:
                 st.error("Invalid username or password.")
 
@@ -948,7 +1052,12 @@ def show_calendly_booking_status(candidate):
     candidate_name = candidate[1] or ""
     candidate_email = candidate[8] or ""
 
-    booking = get_candidate_calendly_booking(candidate_name, candidate_email)
+    user_settings = get_current_settings()
+    booking = get_candidate_calendly_booking(
+        candidate_name,
+        candidate_email,
+        display_timezone=user_settings.get("timezone", "America/New_York"),
+    )
 
     if booking.get("booked"):
         st.markdown(
@@ -1277,6 +1386,7 @@ Urgency:
 # -----------------------------
 
 require_app_login()
+apply_user_visual_settings()
 
 
 # -----------------------------
@@ -1286,16 +1396,18 @@ require_app_login()
 st.markdown("## AI Hiring Engine")
 
 if is_admin_user():
-    top_tabs = st.tabs(["Dashboard", "Candidates", "Clients", "Admin Center"])
+    top_tabs = st.tabs(["Dashboard", "Candidates", "Clients", "Settings", "Admin Center"])
     dashboard_tab = top_tabs[0]
     candidates_tab = top_tabs[1]
     clients_tab = top_tabs[2]
-    admin_center_tab = top_tabs[3]
+    settings_tab = top_tabs[3]
+    admin_center_tab = top_tabs[4]
 else:
-    top_tabs = st.tabs(["Dashboard", "Candidates", "Clients"])
+    top_tabs = st.tabs(["Dashboard", "Candidates", "Clients", "Settings"])
     dashboard_tab = top_tabs[0]
     candidates_tab = top_tabs[1]
     clients_tab = top_tabs[2]
+    settings_tab = top_tabs[3]
     admin_center_tab = None
 
 logout_button()
@@ -1869,6 +1981,127 @@ with clients_tab:
                 st.write(client_needs)
             else:
                 st.info("No AI-formatted client needs saved yet.")
+
+
+
+# -----------------------------
+# SETTINGS
+# -----------------------------
+
+with settings_tab:
+    st.header("Settings")
+
+    username = st.session_state.get("current_username", "")
+    settings = get_user_settings(username)
+
+    st.subheader("Profile Settings")
+
+    display_name_value = settings.get("display_name") or st.session_state.get("current_user_name", "")
+
+    new_display_name = st.text_input(
+        "User Name",
+        value=display_name_value,
+        key="settings_display_name"
+    )
+
+    current_theme_label = get_label_from_value(
+        THEME_OPTIONS,
+        settings.get("theme", "light"),
+        "Light Mode"
+    )
+
+    new_theme_label = st.selectbox(
+        "Mode",
+        list(THEME_OPTIONS.keys()),
+        index=list(THEME_OPTIONS.keys()).index(current_theme_label),
+        key="settings_theme"
+    )
+
+    current_timezone_label = get_label_from_value(
+        US_TIMEZONE_OPTIONS,
+        settings.get("timezone", "America/New_York"),
+        "Eastern Time"
+    )
+
+    new_timezone_label = st.selectbox(
+        "Timezone",
+        list(US_TIMEZONE_OPTIONS.keys()),
+        index=list(US_TIMEZONE_OPTIONS.keys()).index(current_timezone_label),
+        key="settings_timezone"
+    )
+
+    current_size_label = get_label_from_value(
+        CHARACTER_SIZE_OPTIONS,
+        settings.get("character_size", "medium"),
+        "Medium"
+    )
+
+    new_character_size_label = st.selectbox(
+        "Character Size",
+        list(CHARACTER_SIZE_OPTIONS.keys()),
+        index=list(CHARACTER_SIZE_OPTIONS.keys()).index(current_size_label),
+        key="settings_character_size"
+    )
+
+    if st.button("Save Settings", use_container_width=True):
+        success, message = save_user_settings(
+            username=username,
+            display_name=new_display_name,
+            theme=THEME_OPTIONS[new_theme_label],
+            timezone_name=US_TIMEZONE_OPTIONS[new_timezone_label],
+            character_size=CHARACTER_SIZE_OPTIONS[new_character_size_label],
+        )
+
+        if success:
+            st.session_state.current_user_name = new_display_name or APP_USERS[username]["name"]
+            st.success("Settings saved. Refreshing...")
+            st.rerun()
+        else:
+            st.error(f"Settings were not saved: {message}")
+
+    st.divider()
+
+    st.subheader("Change Password")
+
+    current_password = st.text_input(
+        "Current Password",
+        type="password",
+        key="settings_current_password"
+    )
+
+    new_password = st.text_input(
+        "New Password",
+        type="password",
+        key="settings_new_password"
+    )
+
+    confirm_password = st.text_input(
+        "Confirm New Password",
+        type="password",
+        key="settings_confirm_password"
+    )
+
+    if st.button("Change Password", use_container_width=True):
+        current_hash = get_login_password_hash(username)
+
+        if not current_password or not new_password or not confirm_password:
+            st.error("Please complete all password fields.")
+        elif hash_password(current_password) != current_hash:
+            st.error("Current password is incorrect.")
+        elif new_password != confirm_password:
+            st.error("New password and confirmation do not match.")
+        elif len(new_password) < 8:
+            st.error("New password must be at least 8 characters.")
+        else:
+            success, message = save_user_settings(
+                username=username,
+                password_hash=hash_password(new_password),
+            )
+
+            if success:
+                st.success("Password changed successfully.")
+            else:
+                st.error(f"Password was not changed: {message}")
 
 
 

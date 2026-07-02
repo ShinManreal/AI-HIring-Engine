@@ -310,13 +310,14 @@ def detect_interviewer(event, invitee=None):
     return "Not specified"
 
 
-def format_calendly_datetime(start_time):
+def format_calendly_datetime(start_time, display_timezone=None):
     if not start_time:
         return "Not specified", "Not specified"
 
     try:
+        timezone_name = display_timezone or DISPLAY_TIMEZONE
         start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-        local_dt = start_dt.astimezone(ZoneInfo(DISPLAY_TIMEZONE))
+        local_dt = start_dt.astimezone(ZoneInfo(timezone_name))
 
         date_text = local_dt.strftime("%B %d, %Y")
         time_text = local_dt.strftime("%I:%M %p").lstrip("0")
@@ -336,7 +337,7 @@ def invitee_is_active(invitee):
     return True
 
 
-def get_candidate_calendly_booking(candidate_name, candidate_email):
+def get_candidate_calendly_booking(candidate_name, candidate_email, display_timezone=None):
     """
     Returns:
     {
@@ -412,7 +413,10 @@ def get_candidate_calendly_booking(candidate_name, candidate_email):
 
     event = matched_booking["event"]
     invitee = matched_booking["invitee"]
-    date_text, time_text = format_calendly_datetime(event.get("start_time", ""))
+    date_text, time_text = format_calendly_datetime(
+        event.get("start_time", ""),
+        display_timezone=display_timezone,
+    )
 
     return {
         "configured": True,
