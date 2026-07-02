@@ -617,8 +617,14 @@ def get_client_display_name(client):
 
     contact_name = extract_field_from_notes(client_needs, "Contact Name")
     client_name_from_notes = extract_field_from_notes(client_needs, "Client Name")
+    company_name = extract_field_from_notes(client_needs, "Company Name")
 
-    return contact_name or client_name_from_notes or saved_client_name
+    # Display priority:
+    # 1. Contact Name = actual person/client name
+    # 2. Client Name = saved client/contact name from notes
+    # 3. Database client_name
+    # 4. Company Name only as last fallback
+    return contact_name or client_name_from_notes or saved_client_name or company_name
 
 
 def role_uses_ai_need_matching(applied_role):
@@ -1085,6 +1091,8 @@ def build_client_notes_from_row(row):
     service_radius = safe_value(row, "Service Radius")
     urgency = safe_value(row, "Urgency")
 
+    # Save and display the actual client/contact name first.
+    # Company name is only a fallback if the contact/client name is blank.
     client_display_name = name or company_name or "Unnamed Client"
     client_location = ideal_location or "Not specified"
 
@@ -1754,8 +1762,10 @@ Client Needs:
 {client_needs}
 """
 
+                        client_display_name_for_save = client_name.strip() or company_name.strip() or "Unnamed Client"
+
                         client_id = add_client(
-                            client_name,
+                            client_display_name_for_save,
                             role or "Not specified",
                             location,
                             final_notes,
