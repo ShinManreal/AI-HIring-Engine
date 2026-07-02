@@ -32,7 +32,7 @@ from supabase_database import (
 )
 
 from resume_parser import extract_resume_text
-from ai_engine import ask_ai
+from ai_engine import generate_ai_response as ask_ai
 
 from prompts import (
     client_formatter_prompt,
